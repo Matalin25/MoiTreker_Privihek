@@ -1951,6 +1951,16 @@ def manifest():
     return app.send_static_file("manifest.json")
 
 
+@app.route("/favicon.ico")
+def favicon():
+    return app.send_static_file("favicon.ico")
+
+
+@app.route("/apple-touch-icon.png")
+def apple_touch_icon():
+    return app.send_static_file("apple-touch-icon.png")
+
+
 @app.route("/sw.js")
 def service_worker():
     response = app.send_static_file("sw.js")
