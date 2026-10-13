@@ -9,3 +9,9 @@ instance/
 bot_links.json
 bot_token.txt
 proxy.txt
+
+# Ключи LLM (ProxyAPI/OpenAI)
+llm_key.txt
+proxy_api_key.txt
+proxyapi_key.txt
+*.key
