@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}HabitFlow{% endblock %}</title>
+  <link rel="manifest" href="{{ url_for('manifest') }}">
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="{{ url_for('index') }}">
+      <span class="brand-mark">HF</span> HabitFlow
+    </a>
+    <nav class="nav">
+      {% if user %}
+        <a href="{{ url_for('index') }}">Сегодня</a>
+        <a href="{{ url_for('coach') }}">Коуч</a>
+        <a href="{{ url_for('stats') }}">Статистика</a>
+        <a href="{{ url_for('achievements') }}">Достижения</a>
+        <a href="{{ url_for('categories') }}">Категории</a>
+        <a href="{{ url_for('integrations') }}">Интеграции</a>
+        <a href="{{ url_for('settings') }}">Настройки</a>
+        <button id="theme-toggle" class="icon-btn" title="Тема">🌓</button>
+        <a href="{{ url_for('logout') }}" class="btn btn-ghost">Выйти</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="flash-stack">
+          {% for category, message in messages %}
+            <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast-host" class="toast-host"></div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

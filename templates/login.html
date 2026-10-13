@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Вход · HabitFlow{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h1>Вход</h1>
+  <p class="muted">Войдите, чтобы продолжить вести привычки.</p>
+  <form method="post" class="form">
+    <label>Email
+      <input type="email" name="email" required autocomplete="email" placeholder="you@example.com">
+    </label>
+    <label>Пароль
+      <input type="password" name="password" required autocomplete="current-password" placeholder="••••••">
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">Войти</button>
+  </form>
+  <p class="muted center">Нет аккаунта? <a href="{{ url_for('register') }}">Зарегистрироваться</a></p>
+</div>
+{% endblock %}

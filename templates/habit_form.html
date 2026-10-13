@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Редактировать' if habit else 'Новая привычка' }} · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Назад</a>
+  <h1>{{ 'Редактировать привычку' if habit else 'Новая привычка' }}</h1>
+</div>
+
+<form method="post" class="form card">
+  <label>Название
+    <input type="text" name="title" required maxlength="80"
+           value="{{ habit.title if habit else '' }}" placeholder="Например, Пить воду">
+  </label>
+
+  <label>Заметка (необязательно)
+    <textarea name="note" rows="2" placeholder="Дополнительно...">{{ habit.note if habit else '' }}</textarea>
+  </label>
+
+  <label>Категория
+    <select name="category_id">
+      <option value="">— Без категории —</option>
+      {% for cat in categories %}
+        <option value="{{ cat.id }}"
+          {% if habit and habit.category_id == cat.id %}selected{% endif %}>
+          {{ cat.icon }} {{ cat.name }}
+        </option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <label>Теги (через запятую)
+    <input type="text" name="tags" maxlength="200"
+           value="{{ habit_tags | join(', ') }}" placeholder="утро, здоровье, спорт">
+  </label>
+
+  <fieldset>
+    <legend>Иконка</legend>
+    <div class="chip-row">
+      {% for icon in ICONS %}
+        <label class="chip-icon">
+          <input type="radio" name="icon" value="{{ icon }}"
+                 {% if (habit and habit.icon == icon) or (not habit and loop.first) %}checked{% endif %}>
+          <span>{{ icon }}</span>
+        </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Цвет</legend>
+    <div class="chip-row">
+      {% for color in COLORS %}
+        <label class="chip-color">
+          <input type="radio" name="color" value="{{ color }}"
+                 {% if (habit and habit.color == color) or (not habit and loop.first) %}checked{% endif %}>
+          <span style="background: {{ color }}"></span>
+        </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Дни недели</legend>
+    <div class="chip-row">
+      {% for day in range(7) %}
+        <label class="chip-day">
+          <input type="checkbox" name="days" value="{{ day }}"
+                 {% if day in selected_days %}checked{% endif %}>
+          <span>{{ WEEKDAYS[day] }}</span>
+        </label>
+      {% endfor %}
+    </div>
+    <p class="muted small">Оставьте все дни отмеченными для ежедневной привычки.</p>
+  </fieldset>
+
+  <label class="switch imperfection-box">
+    <input type="checkbox" name="imperfection"
+           {% if habit and habit.imperfection %}checked{% endif %}>
+    <span>
+      <strong>🛡 Режим «Imperfection»</strong><br>
+      <span class="muted small">Один пропущенный день не обрывает серию.</span>
+    </span>
+  </label>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ 'Сохранить' if habit else 'Создать' }}</button>
+    <a href="{{ url_for('index') }}" class="btn btn-ghost">Отмена</a>
+  </div>
+</form>
+{% endblock %}

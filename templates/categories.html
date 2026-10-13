@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Категории · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>Категории и теги</h1>
+</div>
+
+<form method="post" class="card form-inline">
+  <label class="grow">Название
+    <input type="text" name="name" required maxlength="40" placeholder="Например, Обучение">
+  </label>
+  <label>Иконка
+    <select name="icon">
+      {% for icon in ['🏷','💚','💼','🏃','📚','💰','🧘','🎯','🍎','😴'] %}
+        <option value="{{ icon }}">{{ icon }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Цвет
+    <select name="color">
+      {% for color in COLORS %}<option value="{{ color }}">{{ color }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn btn-primary">Добавить</button>
+</form>
+
+<section class="cat-list selectable">
+  {% for cat in categories %}
+    <div class="cat-row static">
+      <span class="badge" style="--c: {{ cat.color }}">{{ cat.icon }} {{ cat.name }}</span>
+      <span class="muted small">{{ counts.get(cat.id, 0) }} привычек</span>
+      <form method="post" action="{{ url_for('category_delete', cat_id=cat.id) }}"
+            onsubmit="return confirm('Удалить категорию «{{ cat.name }}»? Привычки останутся без категории.');">
+        <button type="submit" class="icon-btn" title="Удалить">🗑</button>
+      </form>
+    </div>
+  {% else %}
+    <div class="empty"><p>Категорий пока нет.</p></div>
+  {% endfor %}
+</section>
+
+<p class="muted small">Теги задаются на экране привычки (поле «Теги») и служат для свободной группировки.</p>
+{% endblock %}

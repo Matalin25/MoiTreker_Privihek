@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Настройки · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>Настройки</h1>
+</div>
+
+<form method="post" class="form card">
+  <label>Время напоминания
+    <input type="time" name="reminder_time" value="{{ user.reminder_time }}">
+  </label>
+
+  <label class="switch">
+    <input type="checkbox" name="notifications_enabled" {% if user.notifications_enabled %}checked{% endif %}>
+    <span>Включить напоминания</span>
+  </label>
+
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">Сохранить</button>
+  </div>
+</form>
+
+<section class="card">
+  <h2>Уведомления в браузере</h2>
+  <p class="muted">Разрешите уведомления, чтобы получать напоминание о невыполненных привычках.</p>
+  <button id="enable-notifications" class="btn btn-primary">Разрешить уведомления</button>
+  <button id="test-notification" class="btn btn-ghost">Тестовое уведомление</button>
+  <p id="notif-status" class="muted small"></p>
+</section>
+
+<section class="card">
+  <h2>Аккаунт</h2>
+  <p class="muted">{{ user.email }}</p>
+  <a href="{{ url_for('logout') }}" class="btn btn-ghost">Выйти</a>
+</section>
+{% endblock %}

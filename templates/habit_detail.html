@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}{{ habit.title }} · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <div class="detail-title">
+    <span class="habit-emoji big" style="background: {{ habit.color }}22">{{ habit.icon }}</span>
+    <h1>{{ habit.title }}</h1>
+  </div>
+  {% if habit.note %}<p class="muted">{{ habit.note }}</p>{% endif %}
+  {% if category or habit_tags %}
+    <div class="badge-row">
+      {% if category %}
+        <span class="badge" style="--c: {{ category.color }}">{{ category.icon }} {{ category.name }}</span>
+      {% endif %}
+      {% for tag in habit_tags %}
+        <span class="tag">#{{ tag }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+</div>
+
+<section class="stat-grid">
+  <div class="stat">
+    <span class="stat-value">🔥 {{ stats.streak }}</span>
+    <span class="muted">текущий стрик</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">🏆 {{ stats.best }}</span>
+    <span class="muted">лучший стрик</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">Σ {{ stats.total }}</span>
+    <span class="muted">всего отметок</span>
+  </div>
+</section>
+
+{% if stats.imperfection %}
+  <p class="shield-note">🛡 Режим «Imperfection» включён — один пропуск не обрывает серию.</p>
+{% endif %}
+
+<section class="card">
+  <h2>Награды</h2>
+  <div class="badge-grid">
+    {% for b in badges %}
+      <div class="badge-card {% if b.earned %}earned{% else %}locked{% endif %}">
+        <span class="badge-emoji">{{ b.icon }}</span>
+        <strong>{{ b.title }}</strong>
+        <span class="muted small">{{ b.desc }}</span>
+        <span class="badge-state">{% if b.earned %}Получено ✓{% else %}Нужно {{ b.days }} дней{% endif %}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="card">
+  <div class="cal-head">
+    <a class="icon-btn" href="{{ url_for('habit_detail', habit_id=habit.id, year=prev_year, month=prev_month) }}">‹</a>
+    <strong>{{ month_name }} {{ year }}</strong>
+    <a class="icon-btn" href="{{ url_for('habit_detail', habit_id=habit.id, year=next_year, month=next_month) }}">›</a>
+  </div>
+  <div class="calendar">
+    {% for wd in WEEKDAYS %}<div class="cal-dow">{{ wd }}</div>{% endfor %}
+    {% for week in weeks %}
+      {% for day in week %}
+        {% if day == 0 %}
+          <div class="cal-cell empty"></div>
+        {% else %}
+          {% set d = "%04d-%02d-%02d"|format(year, month, day) %}
+          {% set is_future = d > today.isoformat() %}
+          <div class="cal-cell {% if d in stats.done_set %}done{% endif %} {% if d == today.isoformat() %}today{% endif %} {% if is_future %}future{% endif %}"
+               data-date="{{ d }}"
+               data-habit="{{ habit.id }}"
+               {% if not is_future %}role="button" tabindex="0"{% endif %}>{{ day }}</div>
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+  </div>
+  <p class="muted small center">Нажмите на день, чтобы отметить выполнение (в т.ч. задним числом).</p>
+</section>
+
+<div class="form-actions">
+  <a href="{{ url_for('habit_edit', habit_id=habit.id) }}" class="btn btn-primary">Редактировать</a>
+  <button type="button" class="btn btn-ghost share-btn"
+          data-habit="{{ habit.id }}" data-title="{{ habit.title }}"
+          data-streak="{{ stats.streak }}">📤 Поделиться</button>
+  <form method="post" action="{{ url_for('habit_delete', habit_id=habit.id) }}"
+        onsubmit="return confirm('Удалить привычку «{{ habit.title }}»?');">
+    <button type="submit" class="btn btn-danger">Удалить</button>
+  </form>
+</div>
+{% endblock %}

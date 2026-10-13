@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Виджет · HabitFlow</title>
+  <meta name="theme-color" content="#6c5ce7">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="widget-body">
+  <div class="widget-card">
+    <header class="widget-head">
+      <span class="brand"><span class="brand-mark">HF</span></span>
+      <span class="muted small">{{ today.strftime("%d.%m.%Y") }}</span>
+    </header>
+
+    <div class="widget-ring" style="--p: {{ progress }}"><span>{{ done_count }}/{{ total }}</span></div>
+    <p class="muted small center">выполнено сегодня</p>
+
+    <div class="widget-list">
+      {% for item in items %}
+        {% set h = item.habit %}
+        <div class="widget-row {% if item.stats.done_today %}is-done{% endif %}">
+          <span class="habit-emoji" style="background: {{ h.color }}22">{{ h.icon }}</span>
+          <span class="widget-name">{{ h.title }}</span>
+          <span class="streak">🔥 {{ item.stats.streak }}</span>
+          <button class="check small {% if item.stats.done_today %}checked{% endif %}"
+                  data-toggle="{{ h.id }}" aria-label="Отметить">
+            {% if item.stats.done_today %}✓{% endif %}
+          </button>
+        </div>
+      {% else %}
+        <p class="muted small center">На сегодня нет привычек.</p>
+      {% endfor %}
+    </div>
+
+    <a href="{{ url_for('index') }}" class="btn btn-primary btn-block">Открыть приложение</a>
+  </div>
+
+  <div id="toast-host" class="toast-host"></div>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

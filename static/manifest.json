@@ -1,0 +1,19 @@
+{
+  "name": "HabitFlow — трекер привычек",
+  "short_name": "HabitFlow",
+  "description": "Бесплатный русскоязычный трекер привычек без лимитов.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f6fb",
+  "theme_color": "#6c5ce7",
+  "lang": "ru",
+  "icons": [
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

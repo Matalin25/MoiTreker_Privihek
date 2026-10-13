@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Сегодня · HabitFlow{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <p class="muted">{{ today.strftime("%d.%m.%Y") }}</p>
+    <h1>Сегодня</h1>
+    <p class="muted">Выполнено {{ done_count }} из {{ scheduled_items|length }} привычек</p>
+  </div>
+  <div class="progress-ring" style="--p: {{ progress }}">
+    <span>{{ progress }}%</span>
+  </div>
+</section>
+
+{% if quote %}
+  <div class="quote-banner">💬 {{ quote }}</div>
+{% endif %}
+
+<div class="toolbar">
+  <a href="{{ url_for('habit_new') }}" class="btn btn-primary">+ Новая привычка</a>
+  <a href="{{ url_for('widget') }}" class="btn btn-ghost">📱 Виджет</a>
+</div>
+
+{% if scheduled_items %}
+  <div class="habit-list">
+    {% for item in scheduled_items %}
+      {% set h = item.habit %}
+      <div class="habit-card {% if item.stats.done_today %}is-done{% endif %}" data-habit="{{ h.id }}">
+        <button class="check {% if item.stats.done_today %}checked{% endif %}"
+                data-toggle="{{ h.id }}" aria-label="Отметить">
+          {% if item.stats.done_today %}✓{% endif %}
+        </button>
+        <div class="habit-main">
+          <a class="habit-title" href="{{ url_for('habit_detail', habit_id=h.id) }}">
+            <span class="habit-emoji" style="background: {{ h.color }}22">{{ h.icon }}</span>
+            {{ h.title }}
+          </a>
+          <div class="habit-meta">
+            <span class="streak" data-streak="{{ h.id }}">🔥 {{ item.stats.streak }}</span>
+            <span class="muted">рекорд {{ item.stats.best }}</span>
+            <span class="muted">всего {{ item.stats.total }}</span>
+            {% if item.stats.imperfection %}<span class="shield" title="Imperfection: один пропуск прощается">🛡 защита</span>{% endif %}
+          </div>
+          {% if item.category or item.tags %}
+            <div class="badge-row">
+              {% if item.category %}
+                <span class="badge" style="--c: {{ item.category.color }}">{{ item.category.icon }} {{ item.category.name }}</span>
+              {% endif %}
+              {% for tag in item.tags %}
+                <span class="tag">#{{ tag }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+        <div class="habit-actions">
+          <a href="{{ url_for('habit_edit', habit_id=h.id) }}" class="icon-btn" title="Изменить">✏️</a>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty">
+    <p>На сегодня нет запланированных привычек.</p>
+    <a href="{{ url_for('habit_new') }}" class="btn btn-primary">Создать первую привычку</a>
+  </div>
+{% endif %}
+
+{% set others = items | rejectattr('scheduled') | list %}
+{% if others %}
+  <h2 class="section-title">Не по расписанию сегодня</h2>
+  <div class="habit-list muted-list">
+    {% for item in others %}
+      {% set h = item.habit %}
+      <div class="habit-card small">
+        <div class="habit-main">
+          <a class="habit-title" href="{{ url_for('habit_detail', habit_id=h.id) }}">
+            <span class="habit-emoji" style="background: {{ h.color }}22">{{ h.icon }}</span>
+            {{ h.title }}
+          </a>
+          <div class="habit-meta">
+            <span class="streak">🔥 {{ item.stats.streak }}</span>
+            <span class="muted">{{ h.days.split(',') | map('int') | map('string') | list | length }} дн/нед</span>
+          </div>
+          {% if item.category or item.tags %}
+            <div class="badge-row">
+              {% if item.category %}
+                <span class="badge" style="--c: {{ item.category.color }}">{{ item.category.icon }} {{ item.category.name }}</span>
+              {% endif %}
+              {% for tag in item.tags %}
+                <span class="tag">#{{ tag }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Секреты и локальные данные — НЕ загружать в GitHub!
+instance/
+bot_links.json
+bot_token.txt
+proxy.txt

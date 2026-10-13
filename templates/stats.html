@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}Статистика · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>Статистика</h1>
+</div>
+
+<div class="toolbar">
+  <div class="tabs">
+    <a class="tab {% if report.period == 'week' %}active{% endif %}" href="{{ url_for('stats', period='week') }}">Неделя</a>
+    <a class="tab {% if report.period == 'month' %}active{% endif %}" href="{{ url_for('stats', period='month') }}">Месяц</a>
+    <a class="tab {% if report.period == 'year' %}active{% endif %}" href="{{ url_for('stats', period='year') }}">Год</a>
+  </div>
+  <a href="{{ url_for('export_csv') }}" class="btn btn-ghost">⬇ Экспорт CSV</a>
+</div>
+
+<section class="stat-grid">
+  <div class="stat">
+    <span class="stat-value">{{ report.overall }}%</span>
+    <span class="muted">процент выполнения</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ report.total_done }}</span>
+    <span class="muted">выполнено</span>
+  </div>
+  <div class="stat">
+    <span class="stat-value">{{ report.miss }}</span>
+    <span class="muted">пропущено</span>
+  </div>
+</section>
+
+{% if report.total_expected == 0 %}
+  <div class="empty">
+    <p>Пока нет данных за этот период. Отметьте привычки — и здесь появится статистика.</p>
+  </div>
+{% else %}
+
+<section class="card">
+  <h2>Успех и пропуски</h2>
+  <div class="split-bar">
+    <div class="split-done" style="width: {{ report.done_pct }}%"></div>
+    <div class="split-miss" style="width: {{ report.miss_pct }}%"></div>
+  </div>
+  <div class="legend">
+    <span><i class="dot success"></i> Выполнено — {{ report.total_done }} ({{ report.done_pct }}%)</span>
+    <span><i class="dot danger"></i> Пропущено — {{ report.miss }} ({{ report.miss_pct }}%)</span>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Динамика выполнения</h2>
+  <div class="bar-chart">
+    {% for b in report.buckets %}
+      <div class="bar-col" title="{{ b.label }}: {{ b.done }}/{{ b.expected }} ({{ b.pct }}%)">
+        <div class="bar-track">
+          <div class="bar-fill" style="height: {{ b.height }}%"></div>
+        </div>
+        <span class="bar-label">{{ b.label }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+{% if cats %}
+<section class="card">
+  <h2>По категориям</h2>
+  <div class="cat-list">
+    {% for c in cats %}
+      <div class="cat-row">
+        <span class="badge" style="--c: {{ c.color }}">{{ c.icon }} {{ c.name }}</span>
+        <div class="progress-line"><div class="progress-fill" style="width: {{ c.pct }}%; background: {{ c.color }}"></div></div>
+        <span class="cat-pct">{{ c.pct }}%</span>
+        <span class="muted small">{{ c.done }}/{{ c.expected }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>По привычкам</h2>
+  {% if report.per_habit %}
+    <div class="habit-table">
+      {% for row in report.per_habit %}
+        {% set h = row.habit %}
+        <div class="habit-table-row">
+          <a class="habit-title" href="{{ url_for('habit_detail', habit_id=h.id) }}">
+            <span class="habit-emoji" style="background: {{ h.color }}22">{{ h.icon }}</span>
+            <span class="ht-name">{{ h.title }}
+              {% for tag in tags_map.get(h.id, []) %}<span class="tag">#{{ tag }}</span>{% endfor %}
+            </span>
+          </a>
+          <div class="progress-line"><div class="progress-fill" style="width: {{ row.pct }}%; background: {{ h.color }}"></div></div>
+          <span class="cat-pct">{{ row.pct }}%</span>
+          <span class="muted small">{{ row.done }}/{{ row.expected }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">Нет привычек.</p>
+  {% endif %}
+</section>
+
+{% endif %}
+{% endblock %}

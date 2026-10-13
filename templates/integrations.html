@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Интеграции · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>Интеграции и API</h1>
+  <p class="muted">Подключите HabitFlow к календарю, своим сервисам и бэкапам.</p>
+</div>
+
+<section class="card">
+  <h2>🔑 API-ключ</h2>
+  <p class="muted">Используйте в заголовке <code>X-API-Key</code> или параметре <code>?key=</code>.</p>
+  <div class="key-row">
+    <code id="api-key">{{ api_key }}</code>
+    <button class="btn btn-ghost" id="copy-key">Копировать</button>
+    <form method="post" onsubmit="return confirm('Старый ключ перестанет работать. Продолжить?');">
+      <input type="hidden" name="action" value="regenerate">
+      <button class="btn btn-danger" type="submit">Обновить</button>
+    </form>
+  </div>
+  <details class="api-docs">
+    <summary>Эндпоинты REST API v1</summary>
+    <ul>
+      <li><code>GET {{ base }}/api/v1/me</code></li>
+      <li><code>GET {{ base }}/api/v1/habits</code></li>
+      <li><code>POST {{ base }}/api/v1/habits</code> — {title, days, icon, ...}</li>
+      <li><code>GET/PATCH/DELETE {{ base }}/api/v1/habits/&lt;id&gt;</code></li>
+      <li><code>POST {{ base }}/api/v1/habits/&lt;id&gt;/check</code> — {date?, done}</li>
+      <li><code>GET {{ base }}/api/v1/stats?period=week|month|year</code></li>
+      <li><code>GET {{ base }}/api/v1/coach</code></li>
+    </ul>
+  </details>
+</section>
+
+<section class="card">
+  <h2>🔔 Webhook</h2>
+  <p class="muted">POST-уведомление при каждой отметке привычки (JSON).</p>
+  <form method="post" class="form">
+    <input type="hidden" name="action" value="save">
+    <label>URL для webhook
+      <input type="url" name="webhook_url" value="{{ webhook_url }}" placeholder="https://example.com/hook">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Сохранить</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>📲 Telegram-напоминания</h2>
+  {% if not telegram_ready %}
+    <p class="muted">На сервере не задан <code>TELEGRAM_BOT_TOKEN</code> — push-напоминания недоступны.
+      Запустите трекер с токеном бота: <code>$env:TELEGRAM_BOT_TOKEN="..."; python app.py</code>.</p>
+  {% endif %}
+  <p class="muted">Бот присылает в Telegram список невыполненных привычек в заданное время
+    (Настройки → «Время напоминания»). Проще всего выполнить в боте <code>/link {{ api_key }}</code> —
+    чат подключится автоматически.</p>
+
+  {% if telegram_chat_id %}
+    <p><span class="tag ready">подключено</span> chat ID: <code>{{ telegram_chat_id }}</code></p>
+    <div class="form-actions">
+      <form method="post">
+        <input type="hidden" name="action" value="telegram_test">
+        <button type="submit" class="btn btn-primary" {% if not telegram_ready %}disabled{% endif %}>Отправить тест</button>
+      </form>
+      <form method="post" onsubmit="return confirm('Отключить Telegram-напоминания?');">
+        <input type="hidden" name="action" value="telegram_clear">
+        <button type="submit" class="btn btn-danger">Отключить</button>
+      </form>
+    </div>
+  {% else %}
+    <p><span class="tag">не подключено</span></p>
+  {% endif %}
+
+  <form method="post" class="form" style="margin-top:.6rem">
+    <input type="hidden" name="action" value="telegram_save">
+    <label>Chat ID (вручную)
+      <input type="text" name="telegram_chat_id" value="{{ telegram_chat_id }}" placeholder="например, 123456789">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-ghost">Сохранить chat ID</button>
+    </div>
+  </form>
+  <p class="muted small">Узнать свой chat ID можно командой <code>/chatid</code> у бота.</p>
+</section>
+
+<section class="card">
+  <h2>📅 Календарь (iCalendar)</h2>
+  <p class="muted">Подпишитесь на ленту в Google Calendar, Apple Calendar или Outlook.</p>
+  <div class="key-row">
+    <code id="ics-url">{{ base }}/calendar.ics?key={{ api_key }}</code>
+    <button class="btn btn-ghost" id="copy-ics">Копировать</button>
+    <a class="btn btn-primary" href="{{ url_for('calendar_ics', key=api_key) }}">Скачать .ics</a>
+  </div>
+</section>
+
+<section class="card">
+  <h2>💾 Данные</h2>
+  <div class="form-actions">
+    <a class="btn btn-ghost" href="{{ url_for('export_csv') }}">⬇ CSV</a>
+    <a class="btn btn-ghost" href="{{ url_for('export_json') }}">⬇ JSON (полный бэкап)</a>
+  </div>
+  <form method="post" action="{{ url_for('import_json') }}" enctype="multipart/form-data" class="form" style="margin-top:.8rem">
+    <label>Импорт из JSON (заменит текущие данные)
+      <input type="file" name="file" accept="application/json">
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-danger"
+              onclick="return confirm('Импорт заменит все ваши привычки и отметки. Продолжить?');">
+        Импортировать
+      </button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>🧩 Внешние сервисы</h2>
+  <div class="connector-grid">
+    <div class="connector"><span>❤️</span><div><strong>Apple Health</strong><span class="muted small">Синхронизация шагов и тренировок</span></div><span class="tag">planned</span></div>
+    <div class="connector"><span>🟢</span><div><strong>Google Fit</strong><span class="muted small">Активность и сон</span></div><span class="tag">planned</span></div>
+    <div class="connector"><span>📅</span><div><strong>Google Calendar</strong><span class="muted small">Через iCalendar — доступно</span></div><span class="tag">ready</span></div>
+    <div class="connector"><span>🔗</span><div><strong>Webhook / REST API</strong><span class="muted small">Для автоматизаций и ботов</span></div><span class="tag">ready</span></div>
+    <div class="connector"><span>📲</span><div><strong>Telegram</strong><span class="muted small">Бот и push-напоминания</span></div><span class="tag {% if telegram_ready %}ready{% endif %}">{% if telegram_ready %}ready{% else %}planned{% endif %}</span></div>
+  </div>
+</section>
+{% endblock %}

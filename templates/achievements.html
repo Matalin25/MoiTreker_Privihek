@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Достижения · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>Достижения</h1>
+  <p class="muted">Награды за серии и прогресс к следующим бейджам.</p>
+</div>
+
+<section class="hero">
+  <div>
+    <h2>Получено наград: {{ total_earned }}</h2>
+    <p class="muted">Бейджи выдаются за серии 7, 30 и 100 дней.</p>
+  </div>
+  <div class="trophy">🏆</div>
+</section>
+
+<section class="card">
+  <h2>Все бейджи</h2>
+  <div class="badge-grid">
+    {% for code, days, icon, title, desc in badges %}
+      {% set count = earned | selectattr('code', 'equalto', code) | list | length %}
+      <div class="badge-card {% if count %}earned{% else %}locked{% endif %}">
+        <span class="badge-emoji">{{ icon }}</span>
+        <strong>{{ title }}</strong>
+        <span class="muted small">{{ desc }}</span>
+        <span class="badge-state">
+          {% if count %}Получен · {{ count }} раз(а){% else %}Нужно {{ days }} дней{% endif %}
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+{% if earned %}
+<section class="card">
+  <h2>История наград</h2>
+  <div class="award-list">
+    {% for a in earned %}
+      <div class="award-row">
+        <span class="badge-emoji small" style="background: {{ a.habit_color }}22">{{ a.icon }}</span>
+        <div class="grow">
+          <strong>{{ a.title }}</strong>
+          <div class="muted small">{{ a.habit_icon }} {{ a.habit }} · {{ a.earned_at[:10] }}</div>
+        </div>
+        <span class="tag">{{ a.desc }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Прогресс к наградам</h2>
+  {% if progress %}
+    <div class="habit-table">
+      {% for row in progress %}
+        {% set h = row.habit %}
+        {% set target = row.next[1] if row.next else row.best %}
+        {% set pct = (row.best / target * 100) if target else 100 %}
+        <div class="habit-table-row">
+          <a class="habit-title" href="{{ url_for('habit_detail', habit_id=h.id) }}">
+            <span class="habit-emoji" style="background: {{ h.color }}22">{{ h.icon }}</span>
+            <span class="ht-name">{{ h.title }}
+              {% if row.imperfection %}<span class="shield" title="Imperfection">🛡</span>{% endif %}
+            </span>
+          </a>
+          <div class="progress-line">
+            <div class="progress-fill" style="width: {{ pct | round }}%; background: {{ h.color }}"></div>
+          </div>
+          <span class="cat-pct">{{ row.best }}д</span>
+          <span class="muted small">
+            {% if row.next %}→ {{ row.next[2] }} {{ row.next[1] }}{% else %}макс ✓{% endif %}
+          </span>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="muted">Нет привычек.</p>
+  {% endif %}
+</section>
+{% endblock %}

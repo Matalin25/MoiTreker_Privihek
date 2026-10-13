@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}AI-коуч · HabitFlow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <a href="{{ url_for('index') }}" class="muted">← Сегодня</a>
+  <h1>AI-коуч</h1>
+  <p class="muted">Персональные рекомендации на основе ваших отметок за 30 дней.</p>
+</div>
+
+<section class="coach-summary">
+  <div class="coach-avatar">🤖</div>
+  <div>
+    <strong>Анализ привычек</strong>
+    <p class="muted">{{ coach.summary }}</p>
+  </div>
+  <a href="{{ url_for('coach') }}" class="btn btn-ghost">↻ Обновить</a>
+</section>
+
+{% if coach.focus %}
+  <section class="coach-focus kind-{{ coach.focus.kind }}">
+    <span class="coach-icon">{{ coach.focus.icon }}</span>
+    <div>
+      <strong>{{ coach.focus.title }}</strong>
+      <p>{{ coach.focus.text }}</p>
+    </div>
+  </section>
+{% endif %}
+
+<section class="coach-list">
+  {% for ins in coach.insights %}
+    <div class="coach-card kind-{{ ins.kind }}">
+      <span class="coach-icon">{{ ins.icon }}</span>
+      <div>
+        <strong>{{ ins.title }}</strong>
+        <p class="muted">{{ ins.text }}</p>
+      </div>
+    </div>
+  {% endfor %}
+</section>
+
+<p class="muted small center">
+  Коуч работает офлайн на эвристиках. При подключении LLM (переменная окружения
+  <code>HABITFLOW_LLM_URL</code>) рекомендации дополняются генеративными советами.
+</p>
+{% endblock %}
