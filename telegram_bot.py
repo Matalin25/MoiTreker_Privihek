@@ -22,7 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 API_BASE = "https://api.telegram.org/bot" + BOT_TOKEN
@@ -209,6 +209,77 @@ def url_is_safe(url):
 
 
 WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+DAYS_RU = {"пн": 0, "вт": 1, "ср": 2, "чт": 3, "пт": 4, "сб": 5, "вс": 6}
+
+
+def parse_days_arg(raw):
+    """'Пн,Ср,Пт' | 'будни' | 'выходные' | '1,3,5' -> '0,2,4'; иначе None."""
+    raw = (raw or "").strip().lower()
+    if not raw:
+        return None
+    if raw in ("каждый день", "ежедневно", "все", "все дни", "daily"):
+        return "0,1,2,3,4,5,6"
+    if raw in ("будни", "рабочие", "пн-пт", "weekdays"):
+        return "0,1,2,3,4"
+    if raw in ("выходные", "weekend", "сб,вс"):
+        return "5,6"
+    days = set()
+    for part in re.split(r"[,\s]+", raw):
+        part = part.rstrip(".")
+        if not part:
+            continue
+        if part in DAYS_RU:
+            days.add(DAYS_RU[part])
+        elif part.isdigit():
+            n = int(part)
+            if 1 <= n <= 7:
+                days.add(n - 1)  # 1..7 -> Пн..Вс
+            elif n == 0:
+                days.add(0)
+    if not days:
+        return None
+    return ",".join(str(d) for d in sorted(days))
+
+
+def human_days(days):
+    days = sorted(set(days or []))
+    if days == list(range(7)):
+        return "каждый день"
+    return ",".join(WEEKDAYS[d] for d in days if 0 <= d < 7) or "—"
+
+
+def clean_time_arg(raw):
+    """'8:30' / '8.30' / '0830' -> '08:30'; иначе None."""
+    raw = (raw or "").strip()
+    m = re.match(r"^(\d{1,2})[:.\s]?(\d{2})$", raw)
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if 0 <= hh < 24 and 0 <= mm < 60:
+        return f"{hh:02d}:{mm:02d}"
+    return None
+
+
+def clean_date_arg(raw):
+    raw = (raw or "").strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", raw):
+        return None
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+        return raw
+    except ValueError:
+        return None
+
+
+def _get_habits(key):
+    status, data = hf_get("/api/v1/habits", key)
+    if status != 200:
+        return None
+    return data.get("habits", [])
+
+
+def patch_habit(key, habit_id, payload):
+    return hf_request(f"/api/v1/habits/{habit_id}", key, method="PATCH", payload=payload)
 
 
 # --------------------------------------------------------------------------
@@ -360,17 +431,26 @@ def render_today(key):
     lines = [f"📅 <b>Сегодня — {date.today().strftime('%d.%m.%Y')}</b>", ""]
     keyboard = []
     done = 0
+    no_time = 0
     for h in habits:
         mark = "✅" if h["done_today"] else "⬜"
         if h["done_today"]:
             done += 1
-        lines.append(f"{mark} {h['icon']} {h['title']}  🔥{h['streak']}")
+        t = h.get("remind_time")
+        if not t:
+            no_time += 1
+        when = f" ⏰{t}" if t else ""
+        lines.append(f"{mark} {h['icon']} {h['title']}{when}  🔥{h['streak']}")
         keyboard.append([{
             "text": f"{mark} {h['title']}",
             "callback_data": "t:" + str(h["id"]),
         }])
     lines.append("")
     lines.append(f"Выполнено: {done}/{len(habits)}")
+    if no_time:
+        lines.append("")
+        lines.append(f"ℹ️ У {no_time} привычк(и) не задано время — по ним нет напоминаний. "
+                     "Задайте: <code>/set НОМЕР time 08:30</code>")
     return "\n".join(lines), keyboard
 
 
@@ -384,9 +464,18 @@ def render_habits(key):
     if not habits:
         return "Привычек пока нет. Добавьте: /add Название"
     out = ["📋 <b>Все привычки</b>", ""]
-    for h in habits:
-        days = "".join(WEEKDAYS[d] for d in h["days"] if 0 <= d < 7) or "—"
-        out.append(f"{h['icon']} <b>{h['title']}</b> · 🔥{h['streak']} (рекорд {h['best_streak']}) · {days}")
+    for i, h in enumerate(habits, 1):
+        days = human_days(h["days"])
+        t = h.get("remind_time") or "—"
+        extra = ""
+        if h.get("start_date"):
+            extra = f" · с {h['start_date']}"
+        out.append(f"{i}. {h['icon']} <b>{h['title']}</b> · ⏰{t} · {days}"
+                   f" · за {h.get('remind_before', 10)} мин{extra} · 🔥{h['streak']}")
+    out.append("")
+    out.append("Изменить: <code>/set НОМЕР time 08:30</code>, "
+               "<code>/set НОМЕР days Пн,Ср,Пт</code>, "
+               "<code>/set НОМЕР remind 10</code>, <code>/set НОМЕР start 2026-11-01</code>")
     return "\n".join(out)
 
 
@@ -423,14 +512,22 @@ def render_coach(key):
 HELP = (
     "🤖 <b>HabitFlow-бот</b> · на связи Савелий\n\n"
     "• /today — привычки на сегодня и отметка\n"
-    "• /habits — все привычки\n"
-    "• /add Название — новая привычка\n"
+    "• /habits — все привычки (с номерами)\n"
+    "• /add Название | 08:30 | Пн,Ср,Пт | 10 — новая привычка\n"
+    "    (части «время», «дни» и «за N минут» необязательны)\n"
+    "• /set НОМЕР time 08:30 — время привычки\n"
+    "• /set НОМЕР days Пн,Ср,Пт — дни (или будни/выходные/каждый день)\n"
+    "• /set НОМЕР remind 10 — за сколько минут напомнить\n"
+    "• /set НОМЕР start 2026-11-01 — дата начала\n"
+    "• /tz Europe/Moscow — ваш часовой пояс\n"
     "• /stats [week|month|year] — статистика\n"
     "• /coach — советы AI-коуча\n"
     "• /link &lt;API-ключ&gt; — привязать аккаунт и включить напоминания\n"
     "• /chatid — показать ваш chat ID\n"
     "• /reset — очистить историю нашего диалога\n"
     "• /unlink — отвязать аккаунт\n\n"
+    "В нужное время бот напомнит, за N минут до и повторит, если не отмечено. "
+    "Прямо в напоминании есть кнопки «Сделал», «+10 мин» и «Пропустить».\n"
     "А хочешь — просто напиши мне сообщение: поболтаем, подтолкну, если буксуешь.\n"
     "Ключ берётся в приложении на странице «Интеграции»."
 )
@@ -590,6 +687,68 @@ def link_account(chat_id, candidate):
     send(chat_id, "✅ Аккаунт привязан." + tip + "\nОткройте /today")
 
 
+def handle_set(chat_id, key, parts):
+    """'/set НОМЕР поле значение' — правка времени/дней/напоминания/даты."""
+    if len(parts) < 4:
+        send(chat_id, "Использование: <code>/set НОМЕР time 08:30</code>\n"
+                      "Поля: time, days, remind, start. Список: /habits")
+        return
+    habits = _get_habits(key)
+    if habits is None:
+        send(chat_id, "Сессия недействительна. Привяжите аккаунт: /link")
+        return
+    try:
+        idx = int(parts[1])
+    except ValueError:
+        send(chat_id, "Номер привычки должен быть числом. Список: /habits")
+        return
+    if idx < 1 or idx > len(habits):
+        send(chat_id, f"Нет привычки №{idx}. Список: /habits")
+        return
+    habit = habits[idx - 1]
+    field = parts[2].lower()
+    value = " ".join(parts[3:]).strip()
+    payload = {}
+    if field in ("time", "время"):
+        if value.lower() in ("нет", "сброс", "-", "off", "убрать"):
+            payload["remind_time"] = None
+        else:
+            t = clean_time_arg(value)
+            if not t:
+                send(chat_id, "Время в формате 08:30 (или «нет», чтобы убрать).")
+                return
+            payload["remind_time"] = t
+    elif field in ("days", "дни"):
+        d = parse_days_arg(value)
+        if not d:
+            send(chat_id, "Дни: Пн,Ср,Пт или будни/выходные/каждый день.")
+            return
+        payload["days"] = d
+    elif field in ("remind", "напомнить", "за"):
+        try:
+            payload["remind_before"] = max(0, min(1440, int(value)))
+        except ValueError:
+            send(chat_id, "Сколько минут? Например: <code>/set 2 remind 10</code>")
+            return
+    elif field in ("start", "дата"):
+        if value.lower() in ("нет", "сброс", "-", "off"):
+            payload["start_date"] = None
+        else:
+            d = clean_date_arg(value)
+            if not d:
+                send(chat_id, "Дата в формате 2026-11-01 (или «нет»).")
+                return
+            payload["start_date"] = d
+    else:
+        send(chat_id, "Поля: time, days, remind, start. Пример: <code>/set 2 time 08:30</code>")
+        return
+    status, _ = patch_habit(key, habit["id"], payload)
+    if status == 200:
+        send(chat_id, f"✅ Обновил «{habit['title']}». Проверить: /habits")
+    else:
+        send(chat_id, "⚠️ Не удалось обновить привычку.")
+
+
 def handle_command(chat_id, text):
     # Убираем невидимые символы, которые ломают разбор команды.
     text = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text or "")
@@ -664,15 +823,58 @@ def handle_command(chat_id, text):
         msg = render_habits(key)
         send(chat_id, msg or "Сессия недействительна. /link")
     elif base == "add":
-        title = " ".join(parts[1:]).strip()
+        rest = " ".join(parts[1:]).strip()
+        chunks = [c.strip() for c in rest.split("|")] if rest else []
+        title = chunks[0] if chunks else ""
         if not title:
-            send(chat_id, "Использование: <code>/add Пить воду</code>")
+            send(chat_id, "Использование: <code>/add Пить воду | 08:30 | Пн,Ср,Пт | 10</code>\n"
+                          "Части после названия необязательны.")
             return
-        status, _ = hf_post("/api/v1/habits", key, {"title": title})
+        payload = {"title": title}
+        warnings = []
+        if len(chunks) > 1 and chunks[1]:
+            t = clean_time_arg(chunks[1])
+            if t:
+                payload["remind_time"] = t
+            else:
+                warnings.append(f"время «{chunks[1]}» не понял")
+        if len(chunks) > 2 and chunks[2]:
+            d = parse_days_arg(chunks[2])
+            if d:
+                payload["days"] = d
+            else:
+                warnings.append(f"дни «{chunks[2]}» не понял")
+        if len(chunks) > 3 and chunks[3]:
+            try:
+                payload["remind_before"] = max(0, min(1440, int(chunks[3])))
+            except ValueError:
+                warnings.append(f"«{chunks[3]}» не число минут")
+        status, _ = hf_post("/api/v1/habits", key, payload)
         if status == 201:
-            send(chat_id, f"✅ Привычка «{title}» создана.")
+            line = f"✅ Привычка «{title}» создана."
+            if payload.get("remind_time"):
+                line += (f"\n⏰ {payload['remind_time']}, "
+                         f"напомню за {payload.get('remind_before', 10)} мин")
+            else:
+                line += "\nℹ️ Время не задано — напоминаний нет. Добавьте: /set НОМЕР time 08:30"
+            if warnings:
+                line += "\n⚠️ " + "; ".join(warnings)
+            send(chat_id, line)
         else:
             send(chat_id, "⚠️ Не удалось создать привычку.")
+    elif base == "set":
+        handle_set(chat_id, key, parts)
+    elif base == "tz":
+        if len(parts) < 2:
+            send(chat_id, "Использование: <code>/tz Europe/Moscow</code>\n"
+                          "Примеры: Europe/Moscow, Asia/Yekaterinburg, Asia/Vladivostok.")
+            return
+        zone = parts[1].strip()
+        status, _ = hf_request("/api/v1/me", key, method="PATCH", payload={"timezone": zone})
+        if status == 200:
+            send(chat_id, f"🕒 Часовой пояс: <code>{zone}</code>")
+        else:
+            send(chat_id, "⚠️ Не удалось сохранить пояс. Пример: <code>/tz Europe/Moscow</code>")
     elif base == "stats":
         period = parts[1].lower() if len(parts) > 1 else "week"
         if period not in ("week", "month", "year"):
@@ -703,8 +905,25 @@ def handle_update(update):
 def _handle_callback_with_message(callback_id, chat_id, data, message_id):
     tg("answerCallbackQuery", {"callback_query_id": callback_id})
     key = key_for(chat_id)
-    if not key or not data.startswith("t:"):
+    if not key or not (data.startswith("t:") or data.startswith("s:") or data.startswith("x:")):
         return
+
+    if data.startswith("s:"):
+        habit_id = data[2:]
+        status, _ = hf_post(f"/api/v1/habits/{habit_id}/snooze", key, {"minutes": 10})
+        tg("answerCallbackQuery", {"callback_query_id": callback_id,
+                                   "text": "Ок, напомню через 10 минут" if status == 200
+                                           else "Не удалось отложить"})
+        return
+
+    if data.startswith("x:"):
+        habit_id = data[2:]
+        status, _ = hf_post(f"/api/v1/habits/{habit_id}/skip", key, {})
+        tg("answerCallbackQuery", {"callback_query_id": callback_id,
+                                   "text": "Пропущено на сегодня" if status == 200
+                                           else "Не удалось пропустить"})
+        return
+
     habit_id = data[2:]
     status, habit = hf_get(f"/api/v1/habits/{habit_id}", key)
     if status != 200:
