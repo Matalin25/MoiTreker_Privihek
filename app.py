@@ -21,8 +21,13 @@ import calendar
 import sqlite3
 import threading
 import urllib.request
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone, time as dtime
 from functools import wraps
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # pragma: no cover
+    ZoneInfo = None
 
 from flask import (
     Flask, g, render_template, request, redirect, url_for,
@@ -92,6 +97,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash         TEXT NOT NULL,
     reminder_time         TEXT NOT NULL DEFAULT '20:00',
     notifications_enabled INTEGER NOT NULL DEFAULT 1,
+    timezone              TEXT NOT NULL DEFAULT 'Europe/Moscow',
     api_key               TEXT,
     webhook_url           TEXT,
     telegram_chat_id      TEXT,
@@ -107,6 +113,9 @@ CREATE TABLE IF NOT EXISTS habits (
     icon        TEXT NOT NULL DEFAULT '✅',
     color       TEXT NOT NULL DEFAULT '#6c5ce7',
     days        TEXT NOT NULL DEFAULT '0,1,2,3,4,5,6',  -- Пн..Вс
+    remind_time   TEXT,                                 -- 'HH:MM' время действия (или NULL)
+    remind_before INTEGER NOT NULL DEFAULT 10,          -- за сколько минут напомнить
+    start_date    TEXT,                                 -- YYYY-MM-DD, не раньше этой даты
     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
     imperfection INTEGER NOT NULL DEFAULT 0,  -- режим «Imperfection»: один пропуск прощается
     archived    INTEGER NOT NULL DEFAULT 0,
@@ -159,6 +168,26 @@ CREATE INDEX IF NOT EXISTS idx_logs_habit ON habit_logs(habit_id, date);
 CREATE INDEX IF NOT EXISTS idx_habits_user ON habits(user_id);
 CREATE INDEX IF NOT EXISTS idx_categories_user ON categories(user_id);
 CREATE INDEX IF NOT EXISTS idx_tags_user ON tags(user_id);
+
+-- Журнал отправленных напоминаний: защита от дублей (habit_id, date, slot).
+CREATE TABLE IF NOT EXISTS reminder_log (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    date     TEXT NOT NULL,          -- локальная дата пользователя YYYY-MM-DD
+    slot     TEXT NOT NULL,          -- 'pre' | 'on' | 'r1' | 'r2' | 'r3'
+    sent_at  TEXT NOT NULL,
+    UNIQUE (habit_id, date, slot)
+);
+
+-- Отложенные напоминания (кнопка «Отложить»), send_at в UTC.
+CREATE TABLE IF NOT EXISTS reminder_snooze (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    habit_id   INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    send_at    TEXT NOT NULL,
+    sent       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -192,6 +221,13 @@ def init_db():
         )
     if "imperfection" not in cols:
         con.execute("ALTER TABLE habits ADD COLUMN imperfection INTEGER NOT NULL DEFAULT 0")
+    # Миграция: время действия, напоминание за N минут, дата начала.
+    if "remind_time" not in cols:
+        con.execute("ALTER TABLE habits ADD COLUMN remind_time TEXT")
+    if "remind_before" not in cols:
+        con.execute("ALTER TABLE habits ADD COLUMN remind_before INTEGER NOT NULL DEFAULT 10")
+    if "start_date" not in cols:
+        con.execute("ALTER TABLE habits ADD COLUMN start_date TEXT")
     # Миграция для users (API-ключ и webhook), Этап v3.
     ucols = {row[1] for row in con.execute("PRAGMA table_info(users)")}
     if "api_key" not in ucols:
@@ -202,6 +238,8 @@ def init_db():
         con.execute("ALTER TABLE users ADD COLUMN telegram_chat_id TEXT")
     if "telegram_last_sent" not in ucols:
         con.execute("ALTER TABLE users ADD COLUMN telegram_last_sent TEXT")
+    if "timezone" not in ucols:
+        con.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT 'Europe/Moscow'")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_api_key ON users(api_key)")
     con.commit()
     con.close()
@@ -601,16 +639,17 @@ def telegram_configured():
     return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
 
 
-def tg_send_message(chat_id, text):
+def tg_send_message(chat_id, text, reply_markup=None):
     """Best-effort отправка сообщения через Telegram Bot API."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token or not chat_id:
         return False
+    payload = {"chat_id": chat_id, "text": text,
+               "parse_mode": "HTML", "disable_web_page_preview": True}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     try:
-        data = json.dumps({
-            "chat_id": chat_id, "text": text,
-            "parse_mode": "HTML", "disable_web_page_preview": True,
-        }).encode("utf-8")
+        data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             "https://api.telegram.org/bot" + token + "/sendMessage",
             data=data, method="POST", headers={"Content-Type": "application/json"},
@@ -621,57 +660,167 @@ def tg_send_message(chat_id, text):
         return False
 
 
-def pending_today_text(user_id):
-    """Текст напоминания о невыполненных привычках на сегодня (или None)."""
-    db = get_db()
+DEFAULT_TZ = "Europe/Moscow"
+COMMON_TIMEZONES = [
+    "Europe/Kaliningrad", "Europe/Moscow", "Europe/Samara", "Asia/Yekaterinburg",
+    "Asia/Omsk", "Asia/Krasnoyarsk", "Asia/Novosibirsk", "Asia/Irkutsk",
+    "Asia/Yakutsk", "Asia/Vladivostok", "Asia/Magadan", "Asia/Kamchatka",
+    "Europe/Kyiv", "Europe/Minsk", "Asia/Almaty", "Asia/Tbilisi", "Asia/Yerevan",
+    "Asia/Tashkent", "Asia/Dubai", "Europe/London", "Europe/Berlin", "UTC",
+]
+REMINDER_WINDOW = 10  # минут: в каком окне после момента считаем напоминание наступившим
+REPEAT_EVERY = 30     # минут между повторами, если не отмечено
+REPEAT_MAX = 3        # максимум повторов
+
+
+def user_tz(user):
+    """Часовой пояс пользователя (ZoneInfo) с надёжным запасным вариантом."""
+    name = None
+    try:
+        name = user["timezone"]
+    except (KeyError, IndexError):
+        name = None
+    if ZoneInfo is not None:
+        for cand in (name, DEFAULT_TZ):
+            if not cand:
+                continue
+            try:
+                return ZoneInfo(cand)
+            except Exception:
+                continue
+    return timezone.utc
+
+
+def local_date(user, now_utc=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+    return now_utc.astimezone(user_tz(user)).date()
+
+
+def habit_reminder_keyboard(habit_id):
+    """Inline-кнопки под напоминанием: «Сделал», «Отложить», «Пропустить»."""
+    return {"inline_keyboard": [
+        [{"text": "✅ Сделал", "callback_data": "t:" + str(habit_id)},
+         {"text": "⏰ +10 мин", "callback_data": "s:" + str(habit_id)}],
+        [{"text": "❌ Пропустить сегодня", "callback_data": "x:" + str(habit_id)}],
+    ]}
+
+
+def habit_reminder_text(habit, slot, lead, when):
+    icon = habit["icon"] or "✅"
+    title = habit["title"]
+    hhmm = when.strftime("%H:%M")
+    if slot == "pre":
+        return (f"🔔 <b>{icon} {title}</b>\n"
+                f"Старт через {lead} мин (в {hhmm}). Готовься.")
+    if slot == "on":
+        return (f"⏰ <b>{icon} {title}</b>\n"
+                f"Пора действовать — {hhmm}. Как успехи?")
+    tip = random.choice(QUOTES)
+    return (f"😤 <b>{icon} {title}</b> — пока не отмечено.\n"
+            f"Держим курс на цель: {tip}")
+
+
+def _slot_sent(db, habit_id, day, slot):
+    return db.execute(
+        "SELECT 1 FROM reminder_log WHERE habit_id=? AND date=? AND slot=?",
+        (habit_id, day, slot),
+    ).fetchone() is not None
+
+
+def _log_slot(db, habit_id, day, slot):
+    db.execute(
+        "INSERT OR IGNORE INTO reminder_log (habit_id, date, slot, sent_at) VALUES (?, ?, ?, ?)",
+        (habit_id, day, slot, datetime.now(timezone.utc).isoformat()),
+    )
+
+
+def _habit_done(db, habit_id, day):
+    return db.execute(
+        "SELECT 1 FROM habit_logs WHERE habit_id=? AND date=? AND done=1",
+        (habit_id, day),
+    ).fetchone() is not None
+
+
+def _dispatch_snoozes(db, u, now_utc, now_local):
+    """Отправляет отложенные напоминания (кнопка «⏰ +10 мин»)."""
+    rows = db.execute(
+        "SELECT * FROM reminder_snooze WHERE user_id=? AND sent=0 AND send_at <= ?",
+        (u["id"], now_utc.isoformat()),
+    ).fetchall()
+    sent = 0
+    for s in rows:
+        db.execute("UPDATE reminder_snooze SET sent=1 WHERE id=?", (s["id"],))
+        if _habit_done(db, s["habit_id"], now_local.date().isoformat()):
+            continue
+        h = db.execute("SELECT * FROM habits WHERE id=?", (s["habit_id"],)).fetchone()
+        if not h:
+            continue
+        text = (f"⏰ <b>{h['icon']} {h['title']}</b>\n"
+                "Отложенное напоминание — не забудь отметиться!")
+        if tg_send_message(u["telegram_chat_id"], text, habit_reminder_keyboard(h["id"])):
+            sent += 1
+    return sent
+
+
+def _dispatch_slots_for_user(db, u, now_local):
+    today = now_local.date()
+    day = today.isoformat()
+    weekday = today.weekday()
     habits = db.execute(
         "SELECT * FROM habits WHERE user_id = ? AND archived = 0 ORDER BY sort_order, id",
-        (user_id,),
+        (u["id"],),
     ).fetchall()
-    today = date.today()
-    scheduled = [h for h in habits if scheduled_on(h["days"], today)]
-    if not scheduled:
-        return None
-    ids = [h["id"] for h in scheduled]
-    placeholders = ",".join("?" * len(ids))
-    done = {
-        r["habit_id"] for r in db.execute(
-            f"SELECT habit_id FROM habit_logs WHERE date = ? AND done = 1 "
-            f"AND habit_id IN ({placeholders})",
-            (today.isoformat(), *ids),
-        ).fetchall()
-    }
-    pending = [h for h in scheduled if h["id"] not in done]
-    if not pending:
-        return None
-    lines = ["🔔 <b>HabitFlow — напоминание</b>", "", "Сегодня осталось отметить:"]
-    for h in pending:
-        lines.append(f"⬜ {h['icon']} {h['title']}")
-    lines += ["", "Отметьте в приложении или командой /today в боте."]
-    return "\n".join(lines)
+    sent = 0
+    for h in habits:
+        remind = (h["remind_time"] or "").strip()
+        if not remind:
+            continue
+        if weekday not in parse_days(h["days"]):
+            continue
+        if h["start_date"] and h["start_date"] > day:
+            continue
+        try:
+            hh, mm = (int(x) for x in remind.split(":")[:2])
+            base = datetime.combine(today, dtime(hh, mm), tzinfo=now_local.tzinfo)
+        except (ValueError, TypeError):
+            continue
+        lead = h["remind_before"]
+        lead = 10 if lead is None else int(lead)
+        slots = []
+        if lead > 0:
+            slots.append(("pre", base - timedelta(minutes=lead)))
+        slots.append(("on", base))
+        for i in range(1, REPEAT_MAX + 1):
+            slots.append((f"r{i}", base + timedelta(minutes=REPEAT_EVERY * i)))
+        if _habit_done(db, h["id"], day):
+            continue
+        for slot, when in slots:
+            if not (when <= now_local < when + timedelta(minutes=REMINDER_WINDOW)):
+                continue
+            if _slot_sent(db, h["id"], day, slot):
+                continue
+            _log_slot(db, h["id"], day, slot)
+            if tg_send_message(u["telegram_chat_id"],
+                               habit_reminder_text(h, slot, lead, when),
+                               habit_reminder_keyboard(h["id"])):
+                sent += 1
+    return sent
 
 
 def dispatch_telegram_reminders(now=None):
-    """Рассылает напоминания пользователям, у кого пришло время. Возвращает число отправок."""
+    """Рассылает напоминания по привычкам с учётом часового пояса. Возвращает число отправок."""
     db = get_db()
-    now = now or datetime.now()
-    today = now.date().isoformat()
-    hhmm = now.strftime("%H:%M")
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
     rows = db.execute(
         "SELECT * FROM users WHERE telegram_chat_id IS NOT NULL AND notifications_enabled = 1"
     ).fetchall()
     sent = 0
     for u in rows:
-        if (u["reminder_time"] or "") > hhmm:
-            continue
-        if u["telegram_last_sent"] == today:
-            continue
-        text = pending_today_text(u["id"])
-        if not text:
-            continue
-        if tg_send_message(u["telegram_chat_id"], text):
-            db.execute("UPDATE users SET telegram_last_sent = ? WHERE id = ?", (today, u["id"]))
-            sent += 1
+        now_local = now_utc.astimezone(user_tz(u))
+        sent += _dispatch_snoozes(db, u, now_utc, now_local)
+        sent += _dispatch_slots_for_user(db, u, now_local)
     db.commit()
     return sent
 
@@ -1015,10 +1164,39 @@ def index():
     )
 
 
+def _clean_time(raw):
+    """'8:5' -> '08:05'; пусто/мусор -> None."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        hh, mm = (int(x) for x in raw.split(":")[:2])
+        if 0 <= hh < 24 and 0 <= mm < 60:
+            return f"{hh:02d}:{mm:02d}"
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _clean_date(raw):
+    """'YYYY-MM-DD' -> строка; пусто/мусор -> None."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        datetime.strptime(raw, "%Y-%m-%d")
+        return raw
+    except ValueError:
+        return None
+
+
 def _read_habit_form():
     title = (request.form.get("title") or "").strip()
     days = request.form.getlist("days")
     category_id = request.form.get("category_id", type=int)
+    remind_before = request.form.get("remind_before", type=int)
+    if remind_before is None or remind_before < 0 or remind_before > 1440:
+        remind_before = 10
     return {
         "title": title,
         "note": (request.form.get("note") or "").strip(),
@@ -1028,6 +1206,9 @@ def _read_habit_form():
         "category_id": category_id,
         "tags": (request.form.get("tags") or "").strip(),
         "imperfection": 1 if request.form.get("imperfection") else 0,
+        "remind_time": _clean_time(request.form.get("remind_time")),
+        "remind_before": remind_before,
+        "start_date": _clean_date(request.form.get("start_date")),
     }
 
 
@@ -1042,11 +1223,13 @@ def habit_new():
             now = datetime.now().isoformat()
             db = get_db()
             cur = db.execute(
-                """INSERT INTO habits (user_id, title, note, icon, color, days, category_id, imperfection, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO habits (user_id, title, note, icon, color, days, category_id, imperfection,
+                                       remind_time, remind_before, start_date, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session["user_id"], data["title"], data["note"], data["icon"],
                  data["color"], data["days"], data["category_id"],
-                 data["imperfection"], now, now),
+                 data["imperfection"], data["remind_time"], data["remind_before"],
+                 data["start_date"], now, now),
             )
             save_habit_tags(cur.lastrowid, data["tags"], session["user_id"])
             db.commit()
@@ -1076,10 +1259,12 @@ def habit_edit(habit_id):
             flash("Введите название привычки", "error")
         else:
             db.execute(
-                """UPDATE habits SET title=?, note=?, icon=?, color=?, days=?, category_id=?, imperfection=?, updated_at=?
+                """UPDATE habits SET title=?, note=?, icon=?, color=?, days=?, category_id=?, imperfection=?,
+                       remind_time=?, remind_before=?, start_date=?, updated_at=?
                    WHERE id=? AND user_id=?""",
                 (data["title"], data["note"], data["icon"], data["color"],
                  data["days"], data["category_id"], data["imperfection"],
+                 data["remind_time"], data["remind_before"], data["start_date"],
                  datetime.now().isoformat(), habit_id, session["user_id"]),
             )
             save_habit_tags(habit_id, data["tags"], session["user_id"])
@@ -1239,11 +1424,12 @@ def api_reminders():
             (h["id"], today.isoformat()),
         ).fetchone()
         if not row or not row["done"]:
-            pending.append({"id": h["id"], "title": h["title"], "icon": h["icon"]})
+            pending.append({"id": h["id"], "title": h["title"], "icon": h["icon"],
+                            "time": h["remind_time"]})
 
     return jsonify({
         "enabled": bool(user["notifications_enabled"]),
-        "time": user["reminder_time"],
+        "timezone": user["timezone"] if "timezone" in user.keys() else DEFAULT_TZ,
         "pending": pending,
         "date": today.isoformat(),
     })
@@ -1700,6 +1886,9 @@ def _habit_dict(habit):
         "icon": habit["icon"],
         "color": habit["color"],
         "days": sorted(parse_days(habit["days"])),
+        "remind_time": habit["remind_time"],
+        "remind_before": habit["remind_before"],
+        "start_date": habit["start_date"],
         "category_id": habit["category_id"],
         "imperfection": bool(habit["imperfection"]),
         "tags": habit_tags_map([habit["id"]]).get(habit["id"], []),
@@ -1724,10 +1913,38 @@ def api_v1_me():
     return jsonify({
         "id": u["id"], "email": u["email"],
         "reminder_time": u["reminder_time"],
+        "timezone": u["timezone"] if "timezone" in u.keys() else DEFAULT_TZ,
         "notifications_enabled": bool(u["notifications_enabled"]),
         "webhook_configured": bool(u["webhook_url"]),
         "telegram_linked": bool(u["telegram_chat_id"]),
     })
+
+
+@app.route("/api/v1/me", methods=["PATCH", "PUT"])
+@api_auth
+def api_v1_me_update():
+    """Обновление настроек: часовой пояс, уведомления."""
+    body = request.get_json(silent=True) or {}
+    fields, values = [], []
+    if "timezone" in body:
+        tz_name = (body.get("timezone") or DEFAULT_TZ).strip()
+        if ZoneInfo is not None:
+            try:
+                ZoneInfo(tz_name)
+            except Exception:
+                return jsonify({"error": "bad timezone"}), 400
+        fields.append("timezone = ?")
+        values.append(tz_name)
+    if "notifications_enabled" in body:
+        fields.append("notifications_enabled = ?")
+        values.append(1 if body["notifications_enabled"] else 0)
+    if not fields:
+        return jsonify({"error": "nothing to update"}), 400
+    values.append(g.api_user["id"])
+    db = get_db()
+    db.execute("UPDATE users SET " + ", ".join(fields) + " WHERE id = ?", values)
+    db.commit()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/v1/habits")
@@ -1750,14 +1967,22 @@ def api_v1_habit_create():
     else:
         days_str = days or "0,1,2,3,4,5,6"
     now = datetime.now().isoformat()
+    remind_before = body.get("remind_before", 10)
+    try:
+        remind_before = max(0, min(1440, int(remind_before)))
+    except (TypeError, ValueError):
+        remind_before = 10
     db = get_db()
     cur = db.execute(
         """INSERT INTO habits (user_id, title, note, icon, color, days, category_id,
-                                imperfection, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                imperfection, remind_time, remind_before, start_date,
+                                created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (g.api_user["id"], title, body.get("note", ""), body.get("icon", "✅"),
          body.get("color", "#6c5ce7"), days_str, body.get("category_id"),
-         1 if body.get("imperfection") else 0, now, now),
+         1 if body.get("imperfection") else 0,
+         _clean_time(body.get("remind_time")), remind_before,
+         _clean_date(body.get("start_date")), now, now),
     )
     hid = cur.lastrowid
     tags = body.get("tags") or []
@@ -1803,6 +2028,19 @@ def api_v1_habit_update(habit_id):
     if "imperfection" in body:
         fields.append("imperfection = ?")
         values.append(1 if body["imperfection"] else 0)
+    if "remind_time" in body:
+        fields.append("remind_time = ?")
+        values.append(_clean_time(body["remind_time"]))
+    if "remind_before" in body:
+        try:
+            rb = max(0, min(1440, int(body["remind_before"])))
+        except (TypeError, ValueError):
+            rb = 10
+        fields.append("remind_before = ?")
+        values.append(rb)
+    if "start_date" in body:
+        fields.append("start_date = ?")
+        values.append(_clean_date(body["start_date"]))
     fields.append("updated_at = ?")
     values.append(datetime.now().isoformat())
     values.extend([habit_id, g.api_user["id"]])
@@ -1862,6 +2100,52 @@ def api_v1_habit_check(habit_id):
                                   "date": date_str, "done": done, "streak": streak, "best": best})
     return jsonify({"habit_id": habit_id, "date": date_str, "done": done,
                     "streak": streak, "best": best, "new_badges": new_badges})
+
+
+@app.route("/api/v1/habits/<int:habit_id>/snooze", methods=["POST"])
+@api_auth
+def api_v1_habit_snooze(habit_id):
+    """Отложить напоминание (кнопка «⏰ +10 мин»)."""
+    db = get_db()
+    habit = db.execute(
+        "SELECT * FROM habits WHERE id = ? AND user_id = ?",
+        (habit_id, g.api_user["id"]),
+    ).fetchone()
+    if not habit:
+        return jsonify({"error": "not found"}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        minutes = max(1, min(1440, int(body.get("minutes", 10))))
+    except (TypeError, ValueError):
+        minutes = 10
+    now_utc = datetime.now(timezone.utc)
+    send_at = now_utc + timedelta(minutes=minutes)
+    db.execute(
+        "INSERT INTO reminder_snooze (habit_id, user_id, send_at, sent, created_at) "
+        "VALUES (?, ?, ?, 0, ?)",
+        (habit_id, g.api_user["id"], send_at.isoformat(), now_utc.isoformat()),
+    )
+    db.commit()
+    return jsonify({"ok": True, "minutes": minutes, "send_at": send_at.isoformat()})
+
+
+@app.route("/api/v1/habits/<int:habit_id>/skip", methods=["POST"])
+@api_auth
+def api_v1_habit_skip(habit_id):
+    """Пропустить привычку на сегодня — глушим все напоминания по ней."""
+    db = get_db()
+    habit = db.execute(
+        "SELECT * FROM habits WHERE id = ? AND user_id = ?",
+        (habit_id, g.api_user["id"]),
+    ).fetchone()
+    if not habit:
+        return jsonify({"error": "not found"}), 404
+    day = local_date(g.api_user).isoformat()
+    for slot in ("pre", "on", "r1", "r2", "r3"):
+        _log_slot(db, habit_id, day, slot)
+    db.execute("UPDATE reminder_snooze SET sent = 1 WHERE habit_id = ? AND sent = 0", (habit_id,))
+    db.commit()
+    return jsonify({"ok": True, "habit_id": habit_id, "date": day})
 
 
 @app.route("/api/v1/stats")
@@ -1934,16 +2218,21 @@ def api_v1_telegram_test():
 def settings():
     db = get_db()
     if request.method == "POST":
-        time_str = request.form.get("reminder_time") or "20:00"
+        tz_name = (request.form.get("timezone") or DEFAULT_TZ).strip()
+        if ZoneInfo is not None:
+            try:
+                ZoneInfo(tz_name)
+            except Exception:
+                tz_name = DEFAULT_TZ
         enabled = 1 if request.form.get("notifications_enabled") else 0
         db.execute(
-            "UPDATE users SET reminder_time = ?, notifications_enabled = ? WHERE id = ?",
-            (time_str, enabled, session["user_id"]),
+            "UPDATE users SET timezone = ?, notifications_enabled = ? WHERE id = ?",
+            (tz_name, enabled, session["user_id"]),
         )
         db.commit()
         flash("Настройки сохранены", "success")
         return redirect(url_for("settings"))
-    return render_template("settings.html")
+    return render_template("settings.html", timezones=COMMON_TIMEZONES)
 
 
 @app.route("/manifest.json")
