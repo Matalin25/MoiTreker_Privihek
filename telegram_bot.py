@@ -531,51 +531,63 @@ def saveliy_reply(chat_id, text):
 # Обработка команд и callback
 # --------------------------------------------------------------------------
 
+def link_account(chat_id, candidate):
+    """Привязывает чат к аккаунту трекера по API-ключу."""
+    status, _ = hf_get("/api/v1/me", candidate)
+    if status != 200:
+        send(chat_id, f"❌ Не удалось привязать (код {status}). Проверьте ключ на "
+                      "странице «Интеграции» и что сайт открывается.")
+        return
+    links = load_links()
+    links[str(chat_id)] = candidate
+    save_links(links)
+    # Включаем серверную push-рассылку в этот чат.
+    lstatus, info = hf_post("/api/v1/telegram/link", candidate, {"chat_id": chat_id})
+    tip = ""
+    if lstatus == 200:
+        if info.get("bot_configured"):
+            tip = ("\n🔔 Напоминания в Telegram включены (в "
+                   + str(info.get("reminder_time", "20:00")) + ").")
+        else:
+            tip = ("\n⚠️ Трекер запущен без токена бота — напоминания будут "
+                   "работать после перезапуска с <code>TELEGRAM_BOT_TOKEN</code>.")
+    send(chat_id, "✅ Аккаунт привязан." + tip + "\nОткройте /today")
+
+
 def handle_command(chat_id, text):
-    parts = text.strip().split()
+    # Убираем невидимые символы, которые ломают разбор команды.
+    text = re.sub(r"[\u200b\u200c\u200d\u2060\ufeff]", "", text or "")
+    text = text.replace("\u00a0", " ").strip()
+    parts = text.split()
+    if not parts:
+        return
     cmd = parts[0].lower().split("@")[0]
+    base = cmd.lstrip("/\\")  # терпим к "\link" и "link" без слэша
     key = key_for(chat_id)
 
-    if cmd in ("/start", "/help"):
+    if base in ("start", "help"):
         send(chat_id, HELP)
         return
 
-    if cmd == "/reset":
+    if base == "reset":
         HISTORY.pop(chat_id, None)
         _RATE.pop(chat_id, None)
         send(chat_id, "Историю нашего разговора подчистил. Начнём с чистого листа.")
         return
 
-    if cmd == "/link":
+    if base == "link":
         if len(parts) < 2:
-            send(chat_id, "Использование: <code>/link ВАШ_API_КЛЮЧ</code>")
+            send(chat_id, "Использование: <code>/link ВАШ_API_КЛЮЧ</code>\n"
+                          "Ключ — на странице «Интеграции» на сайте.")
             return
-        candidate = parts[1].strip()
-        status, _ = hf_get("/api/v1/me", candidate)
-        if status == 200:
-            links = load_links()
-            links[str(chat_id)] = candidate
-            save_links(links)
-            # Включаем серверную push-рассылку в этот чат.
-            lstatus, info = hf_post("/api/v1/telegram/link", candidate, {"chat_id": chat_id})
-            tip = ""
-            if lstatus == 200:
-                if info.get("bot_configured"):
-                    tip = ("\n🔔 Напоминания в Telegram включены (в "
-                           + str(info.get("reminder_time", "20:00")) + ").")
-                else:
-                    tip = ("\n⚠️ Трекер запущен без токена бота — напоминания будут "
-                           "работать после перезапуска с <code>TELEGRAM_BOT_TOKEN</code>.")
-            send(chat_id, "✅ Аккаунт привязан." + tip + "\nОткройте /today")
-        else:
-            send(chat_id, "❌ Неверный ключ. Проверьте его на странице «Интеграции».")
+        link_account(chat_id, parts[1].strip())
         return
 
-    if cmd == "/chatid":
+    if base == "chatid":
         send(chat_id, f"Ваш chat ID: <code>{chat_id}</code>")
         return
 
-    if cmd == "/unlink":
+    if base == "unlink":
         links = load_links()
         old = links.pop(str(chat_id), None)
         save_links(links)
@@ -584,20 +596,38 @@ def handle_command(chat_id, text):
         send(chat_id, "Аккаунт отвязан. Напоминания отключены.")
         return
 
+    if base == "diag":
+        st, _ = hf_get("/api/v1/me", key) if key else (0, {})
+        send(chat_id, "🛠 Диагностика:\n"
+                      f"трекер: <code>{HABITFLOW_URL}</code>\n"
+                      f"привязан: {'да' if key else 'нет'}\n"
+                      f"код связи с трекером: {st}")
+        return
+
     if not key:
+        # Ищем в сообщении ключ — даже если команда написана с опечаткой
+        # или прислана отдельным сообщением.
+        for token in parts:
+            token = token.strip()
+            if token.startswith("/") or len(token) < 16:
+                continue
+            status, _ = hf_get("/api/v1/me", token)
+            if status == 200:
+                link_account(chat_id, token)
+                return
         send(chat_id, "Сначала привяжите аккаунт: <code>/link ВАШ_API_КЛЮЧ</code>")
         return
 
-    if cmd == "/today":
+    if base == "today":
         text, keyboard = render_today(key)
         if text is None:
             send(chat_id, "Сессия недействительна. Привяжите аккаунт: /link")
             return
         send(chat_id, text, keyboard)
-    elif cmd == "/habits":
+    elif base == "habits":
         msg = render_habits(key)
         send(chat_id, msg or "Сессия недействительна. /link")
-    elif cmd == "/add":
+    elif base == "add":
         title = " ".join(parts[1:]).strip()
         if not title:
             send(chat_id, "Использование: <code>/add Пить воду</code>")
@@ -607,13 +637,13 @@ def handle_command(chat_id, text):
             send(chat_id, f"✅ Привычка «{title}» создана.")
         else:
             send(chat_id, "⚠️ Не удалось создать привычку.")
-    elif cmd == "/stats":
+    elif base == "stats":
         period = parts[1].lower() if len(parts) > 1 else "week"
         if period not in ("week", "month", "year"):
             period = "week"
         msg = render_stats(key, period)
         send(chat_id, msg or "Сессия недействительна. /link")
-    elif cmd == "/coach":
+    elif base == "coach":
         msg = render_coach(key)
         send(chat_id, msg or "Сессия недействительна. /link")
     elif cmd.startswith("/"):
