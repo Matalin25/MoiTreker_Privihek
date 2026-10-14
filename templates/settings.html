@@ -7,14 +7,23 @@
 </div>
 
 <form method="post" class="form card">
-  <label>Время напоминания
-    <input type="time" name="reminder_time" value="{{ user.reminder_time }}">
+  <label>Часовой пояс
+    <select name="timezone">
+      {% for tz in timezones %}
+        <option value="{{ tz }}" {% if user.timezone == tz %}selected{% endif %}>{{ tz }}</option>
+      {% endfor %}
+    </select>
   </label>
+  <p class="muted small">Напоминания приходят по этому времени. Если вашего пояса нет в списке,
+    напишите боту <code>/tz Ваш/Пояс</code>.</p>
 
   <label class="switch">
     <input type="checkbox" name="notifications_enabled" {% if user.notifications_enabled %}checked{% endif %}>
     <span>Включить напоминания</span>
   </label>
+
+  <p class="muted small">Время и дни задаются у каждой привычки (в карточке привычки).
+    Бот напомнит в нужный момент, за указанное число минут до и при необходимости повторит.</p>
 
   <div class="form-actions">
     <button type="submit" class="btn btn-primary">Сохранить</button>
