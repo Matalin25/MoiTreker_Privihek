@@ -73,6 +73,24 @@
     <p class="muted small">Оставьте все дни отмеченными для ежедневной привычки.</p>
   </fieldset>
 
+  <fieldset>
+    <legend>Время и напоминание</legend>
+    <label>Время действия
+      <input type="time" name="remind_time"
+             value="{{ habit.remind_time if habit and habit.remind_time else '' }}">
+    </label>
+    <label>Напомнить заранее (минут)
+      <input type="number" name="remind_before" min="0" max="1440" step="5"
+             value="{{ habit.remind_before if habit and habit.remind_before is not none else 10 }}">
+    </label>
+    <label>Дата начала (необязательно)
+      <input type="date" name="start_date"
+             value="{{ habit.start_date if habit and habit.start_date else '' }}">
+    </label>
+    <p class="muted small">Если время не задано — напоминаний по этой привычке не будет.
+      В заданное время бот напомнит, а если не отметить — повторит ещё до 3 раз.</p>
+  </fieldset>
+
   <label class="switch imperfection-box">
     <input type="checkbox" name="imperfection"
            {% if habit and habit.imperfection %}checked{% endif %}>
