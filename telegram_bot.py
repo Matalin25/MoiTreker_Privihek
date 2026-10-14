@@ -17,6 +17,7 @@
 import os
 import json
 import re
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -214,17 +215,52 @@ WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 # Хранилище привязок chat_id -> api_key
 # --------------------------------------------------------------------------
 
+_LINKS_PATH_CACHE = None
+
+
+def _links_path():
+    """Возвращает путь для хранения привязок, создавая каталог при необходимости.
+
+    Если заданный в HABITFLOW_LINKS путь недоступен (например, не подключён
+    Volume), откатывается на рабочий каталог бота, затем на временный.
+    """
+    global _LINKS_PATH_CACHE
+    if _LINKS_PATH_CACHE:
+        return _LINKS_PATH_CACHE
+    candidates = [
+        LINKS_FILE,
+        os.path.join(BASE_DIR, "bot_links.json"),
+        os.path.join(tempfile.gettempdir(), "bot_links.json"),
+    ]
+    for path in candidates:
+        folder = os.path.dirname(os.path.abspath(path))
+        try:
+            os.makedirs(folder, exist_ok=True)
+            if os.access(folder, os.W_OK):
+                _LINKS_PATH_CACHE = path
+                return path
+        except OSError:
+            continue
+    _LINKS_PATH_CACHE = os.path.join(tempfile.gettempdir(), "bot_links.json")
+    return _LINKS_PATH_CACHE
+
+
 def load_links():
     try:
-        with open(LINKS_FILE, encoding="utf-8") as f:
+        with open(_links_path(), encoding="utf-8") as f:
             return json.load(f)
     except (OSError, ValueError):
         return {}
 
 
 def save_links(links):
-    with open(LINKS_FILE, "w", encoding="utf-8") as f:
-        json.dump(links, f, ensure_ascii=False, indent=2)
+    try:
+        with open(_links_path(), "w", encoding="utf-8") as f:
+            json.dump(links, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError as e:
+        print("не удалось сохранить привязки:", e)
+        return False
 
 
 def key_for(chat_id):
