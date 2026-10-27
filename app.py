@@ -2269,6 +2269,10 @@ if os.environ.get("HABITFLOW_ENABLE_SCHEDULER") == "1" and telegram_configured()
 # Автозапуск Telegram-бота в фоновом потоке (для хостинга Amvera и т.п.)
 # --------------------------------------------------------------------------
 
+print("[INFO] Модуль app.py загружается...", flush=True)
+print(f"[INFO] TELEGRAM_BOT_TOKEN: {'задан' if os.environ.get('TELEGRAM_BOT_TOKEN') else 'НЕ задан'}", flush=True)
+print(f"[INFO] WERKZEUG_RUN_MAIN: {os.environ.get('WERKZEUG_RUN_MAIN', 'не установлен')}", flush=True)
+
 _bot_thread_started = False
 
 def start_bot_background():
@@ -2280,24 +2284,24 @@ def start_bot_background():
     
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not bot_token:
-        print("⚠ TELEGRAM_BOT_TOKEN не задан — бот не запущен.")
+        print("⚠ TELEGRAM_BOT_TOKEN не задан — бот не запущен.", flush=True)
         return
     
     def _run_bot():
         try:
             # Импортируем здесь, чтобы избежать циклических зависимостей
             from telegram_bot import main as bot_main
-            print("🤖 Запускаю Telegram-бота в фоновом потоке...")
+            print("🤖 Запускаю Telegram-бота в фоновом потоке...", flush=True)
             bot_main()
         except Exception as e:
-            print(f"❌ Ошибка запуска бота: {e}")
+            print(f"❌ Ошибка запуска бота: {e}", flush=True)
             import traceback
             traceback.print_exc()
     
     _bot_thread_started = True
     bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
     bot_thread.start()
-    print("✅ Поток Telegram-бота запущен")
+    print("✅ Поток Telegram-бота запущен", flush=True)
 
 # Автозапуск бота при импорте модуля (для gunicorn/production)
 # Запускается только если есть токен и это не reloader parent process
