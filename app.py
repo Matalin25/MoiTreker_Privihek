@@ -2265,12 +2265,64 @@ if os.environ.get("HABITFLOW_ENABLE_SCHEDULER") == "1" and telegram_configured()
     start_reminder_scheduler()
 
 
+# --------------------------------------------------------------------------
+# Автозапуск Telegram-бота в фоновом потоке (для хостинга Amvera и т.п.)
+# --------------------------------------------------------------------------
+
+_bot_thread_started = False
+
+def start_bot_background():
+    """Запускает Telegram-бота в отдельном потоке, если есть токен."""
+    global _bot_thread_started
+    
+    if _bot_thread_started:
+        return
+    
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not bot_token:
+        print("⚠ TELEGRAM_BOT_TOKEN не задан — бот не запущен.")
+        return
+    
+    def _run_bot():
+        try:
+            # Импортируем здесь, чтобы избежать циклических зависимостей
+            from telegram_bot import main as bot_main
+            print("🤖 Запускаю Telegram-бота в фоновом потоке...")
+            bot_main()
+        except Exception as e:
+            print(f"❌ Ошибка запуска бота: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    _bot_thread_started = True
+    bot_thread = threading.Thread(target=_run_bot, daemon=True, name="telegram-bot")
+    bot_thread.start()
+    print("✅ Поток Telegram-бота запущен")
+
+# Автозапуск бота при импорте модуля (для gunicorn/production)
+# Запускается только если есть токен и это не reloader parent process
+def _auto_start_bot():
+    """Автоматически запускает бота при старте приложения."""
+    # Не запускаем в reloader parent process
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "false":
+        return
+    
+    # Запускаем только если есть токен
+    if os.environ.get("TELEGRAM_BOT_TOKEN"):
+        start_bot_background()
+
+# Запускаем бота при импорте (для gunicorn)
+_auto_start_bot()
+
+
+# Для Flask dev server
 if __name__ == "__main__":
     DEBUG = os.environ.get("HABITFLOW_DEBUG", "1") == "1"
     # Планировщик напоминаний запускаем только в рабочем процессе
     # (не в reloader-родителе werkzeug), и только если есть токен бота.
     if (not DEBUG or os.environ.get("WERKZEUG_RUN_MAIN") == "true") and telegram_configured():
         start_reminder_scheduler()
+        start_bot_background()
     # На хостинге (Railway и т.п.) слушаем 0.0.0.0:$PORT, локально — 127.0.0.1:5000.
     app.run(debug=DEBUG,
             host="0.0.0.0" if os.environ.get("PORT") else "127.0.0.1",

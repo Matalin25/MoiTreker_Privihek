@@ -15,3 +15,9 @@ llm_key.txt
 proxy_api_key.txt
 proxyapi_key.txt
 *.key
+
+# Логи
+*.log
+*.err
+run_*.log
+run_*.err
