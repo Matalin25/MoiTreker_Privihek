@@ -13,6 +13,7 @@
     </label>
     <button type="submit" class="btn btn-primary btn-block">Войти</button>
   </form>
+  <p class="muted center"><a href="{{ url_for('password_reset.forgot_password') }}">Забыли пароль?</a></p>
   <p class="muted center">Нет аккаунта? <a href="{{ url_for('register') }}">Зарегистрироваться</a></p>
 </div>
 {% endblock %}

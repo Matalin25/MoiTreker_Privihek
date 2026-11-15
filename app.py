@@ -34,6 +34,7 @@ from flask import (
     session, flash, jsonify, Response,
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from password_reset import RESET_SCHEMA, register_password_reset
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Путь к базе можно задать переменной HABITFLOW_DB (нужно на хостинге с
@@ -211,7 +212,7 @@ def close_db(_exc):
 def init_db():
     os.makedirs(INSTANCE_DIR, exist_ok=True)
     con = sqlite3.connect(DB_PATH)
-    con.executescript(SCHEMA)
+    con.executescript(SCHEMA + RESET_SCHEMA)
     # Миграция для баз, созданных на Этапе 1 (без категорий и тегов).
     cols = {row[1] for row in con.execute("PRAGMA table_info(habits)")}
     if "category_id" not in cols:
@@ -2257,6 +2258,7 @@ def service_worker():
     return response
 
 
+register_password_reset(app, get_db)
 init_db()
 
 # Автозапуск рассылки напоминаний в production (например, под gunicorn на Railway).
