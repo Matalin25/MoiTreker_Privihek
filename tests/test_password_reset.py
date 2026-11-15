@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from werkzeug.security import check_password_hash, generate_password_hash
-from password_reset import digest, send_reset_email, delivery_failure_reason
+from password_reset import digest, send_reset_email, delivery_failure_reason, EmailConfigurationError
 
 
 class PasswordResetTests(unittest.TestCase):
@@ -145,3 +145,20 @@ class PasswordResetTests(unittest.TestCase):
         for error, expected in cases:
             with self.subTest(category=expected[0]):
                 self.assertEqual(delivery_failure_reason(error), expected)
+
+    def test_exact_configuration_diagnostics(self):
+        config = {'HABITFLOW_PUBLIC_URL': 'https://example.com', 'SMTP_HOST': 'smtp.mail.ru',
+                  'SMTP_FROM': 'test@example.com', 'SMTP_PORT': '465', 'SMTP_SECURITY': 'ssl'}
+        cases = [('HABITFLOW_PUBLIC_URL', '', 'CONFIG_HABITFLOW_PUBLIC_URL_INVALID'),
+                 ('SMTP_HOST', '', 'CONFIG_SMTP_HOST_MISSING'),
+                 ('SMTP_FROM', '', 'CONFIG_SMTP_FROM_MISSING'),
+                 ('SMTP_FROM', 'invalid', 'CONFIG_SMTP_FROM_INVALID'),
+                 ('SMTP_SECURITY', 'invalid', 'CONFIG_SMTP_SECURITY_INVALID'),
+                 ('SMTP_PORT', 'invalid', 'CONFIG_SMTP_PORT_INVALID'),
+                 ('SMTP_PORT', '99999', 'CONFIG_SMTP_PORT_INVALID')]
+        for name, value, reason in cases:
+            with self.subTest(setting=name, reason=reason):
+                with patch.dict(os.environ, {**config, name: value}):
+                    with self.assertRaises(EmailConfigurationError) as error:
+                        send_reset_email('test@example.com', 'token')
+                    self.assertEqual(delivery_failure_reason(error.exception), (reason, None))

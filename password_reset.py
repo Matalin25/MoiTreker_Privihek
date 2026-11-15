@@ -31,6 +31,10 @@ def digest(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
+class EmailConfigurationError(ValueError):
+    """Безопасный код ошибки настройки, не содержащий её значение."""
+
+
 def delivery_failure_reason(error):
     """Только безопасная категория и числовой код, без текста ответа SMTP."""
     if isinstance(error, smtplib.SMTPAuthenticationError):
@@ -49,24 +53,40 @@ def delivery_failure_reason(error):
         return 'SMTP_PROTOCOL_FAILED', None
     if isinstance(error, OSError):
         return 'SMTP_CONNECTION_FAILED', None
+    if isinstance(error, EmailConfigurationError):
+        return str(error), None
+    if isinstance(error, UnicodeEncodeError):
+        return 'SMTP_ENCODING_INVALID', None
     if isinstance(error, ValueError):
         return 'SMTP_CONFIG_INVALID', None
     return 'SMTP_UNEXPECTED_ERROR', None
 
 
 def send_reset_email(recipient, token):
-    base = os.environ.get('HABITFLOW_PUBLIC_URL', '').rstrip('/')
-    parsed = urlsplit(base)
+    base = os.environ.get('HABITFLOW_PUBLIC_URL', '').strip().rstrip('/')
+    try:
+        parsed = urlsplit(base)
+    except ValueError:
+        raise EmailConfigurationError('CONFIG_HABITFLOW_PUBLIC_URL_INVALID') from None
     if parsed.scheme != 'https' or not parsed.netloc or parsed.query or parsed.fragment:
-        raise ValueError('HABITFLOW_PUBLIC_URL must be an HTTPS URL')
-    host = os.environ.get('SMTP_HOST', '')
-    sender = os.environ.get('SMTP_FROM', '')
-    if not host or not sender:
-        raise ValueError('SMTP_HOST and SMTP_FROM are required')
-    mode = os.environ.get('SMTP_SECURITY', 'starttls').lower()
+        raise EmailConfigurationError('CONFIG_HABITFLOW_PUBLIC_URL_INVALID')
+    host = os.environ.get('SMTP_HOST', '').strip()
+    sender = os.environ.get('SMTP_FROM', '').strip()
+    if not host:
+        raise EmailConfigurationError('CONFIG_SMTP_HOST_MISSING')
+    if not sender:
+        raise EmailConfigurationError('CONFIG_SMTP_FROM_MISSING')
+    if any(c in sender for c in '\r\n') or '@' not in sender:
+        raise EmailConfigurationError('CONFIG_SMTP_FROM_INVALID')
+    mode = os.environ.get('SMTP_SECURITY', 'starttls').strip().lower()
     if mode not in ('ssl', 'starttls'):
-        raise ValueError('SMTP_SECURITY must be ssl or starttls')
-    port = int(os.environ.get('SMTP_PORT', '465' if mode == 'ssl' else '587'))
+        raise EmailConfigurationError('CONFIG_SMTP_SECURITY_INVALID')
+    try:
+        port = int(os.environ.get('SMTP_PORT', '465' if mode == 'ssl' else '587').strip())
+    except ValueError:
+        raise EmailConfigurationError('CONFIG_SMTP_PORT_INVALID') from None
+    if not 1 <= port <= 65535:
+        raise EmailConfigurationError('CONFIG_SMTP_PORT_INVALID')
     message = EmailMessage()
     message['Subject'] = 'HabitFlow — восстановление пароля'
     message['From'] = sender
@@ -85,7 +105,7 @@ def send_reset_email(recipient, token):
     with connection as smtp:
         if mode == 'starttls':
             smtp.starttls(context=context)
-        username = os.environ.get('SMTP_USERNAME', '')
+        username = os.environ.get('SMTP_USERNAME', '').strip()
         if username:
             smtp.login(username, os.environ.get('SMTP_PASSWORD', ''))
         smtp.send_message(message)
