@@ -1,0 +1,11 @@
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: '3.11'
+build:
+  requirementsPath: requirements.txt
+run:
+  command: env HABITFLOW_DB=/data/habits.db gunicorn app:app --workers 1 --threads 8 --timeout 120 --bind 0.0.0.0:3000
+  persistenceMount: /data
+  containerPort: 3000
