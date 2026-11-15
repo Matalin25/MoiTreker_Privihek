@@ -31,6 +31,29 @@ def digest(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
+def delivery_failure_reason(error):
+    """Только безопасная категория и числовой код, без текста ответа SMTP."""
+    if isinstance(error, smtplib.SMTPAuthenticationError):
+        return 'SMTP_AUTH_FAILED', error.smtp_code
+    if isinstance(error, smtplib.SMTPRecipientsRefused):
+        return 'SMTP_RECIPIENT_REFUSED', None
+    if isinstance(error, smtplib.SMTPSenderRefused):
+        return 'SMTP_SENDER_REFUSED', error.smtp_code
+    if isinstance(error, ssl.SSLError):
+        return 'SMTP_TLS_FAILED', None
+    if isinstance(error, TimeoutError):
+        return 'SMTP_TIMEOUT', None
+    if isinstance(error, smtplib.SMTPResponseException):
+        return 'SMTP_SERVER_REJECTED', error.smtp_code
+    if isinstance(error, smtplib.SMTPException):
+        return 'SMTP_PROTOCOL_FAILED', None
+    if isinstance(error, OSError):
+        return 'SMTP_CONNECTION_FAILED', None
+    if isinstance(error, ValueError):
+        return 'SMTP_CONFIG_INVALID', None
+    return 'SMTP_UNEXPECTED_ERROR', None
+
+
 def send_reset_email(recipient, token):
     base = os.environ.get('HABITFLOW_PUBLIC_URL', '').rstrip('/')
     parsed = urlsplit(base)
@@ -114,11 +137,12 @@ def register_password_reset(app, get_db):
             if user:
                 try:
                     send_reset_email(user['email'], token)
-                except Exception:
+                except Exception as error:
                     db.execute('DELETE FROM password_resets WHERE token_hash = ?', (digest(token),))
                     db.commit()
                     # Исключения SMTP могут содержать адреса и секреты.
-                    app.logger.error('Password reset email delivery failed; check SMTP configuration')
+                    reason, code = delivery_failure_reason(error)
+                    app.logger.error('Password reset email delivery failed: %s (code=%s)', reason, code)
             flash('Если аккаунт с таким email существует, мы отправили ссылку для восстановления. '
                   'Проверьте почту и папку «Спам». Повторить запрос можно через минуту.', 'success')
             return redirect(url_for('password_reset.forgot_password'))

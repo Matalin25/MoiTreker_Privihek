@@ -1,6 +1,7 @@
 """Run: python -m unittest discover -s tests -v (no network or real user data)."""
 import importlib
 import os
+import smtplib
 import tempfile
 import time
 import unittest
@@ -8,7 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from werkzeug.security import check_password_hash, generate_password_hash
-from password_reset import digest, send_reset_email
+from password_reset import digest, send_reset_email, delivery_failure_reason
 
 
 class PasswordResetTests(unittest.TestCase):
@@ -133,3 +134,14 @@ class PasswordResetTests(unittest.TestCase):
                 connection.login.assert_called_once_with('sender', 'secret')
                 message = connection.send_message.call_args.args[0]
                 self.assertIn('https://example.com/reset-password/random-token', message.get_content())
+
+    def test_safe_delivery_diagnostics(self):
+        cases = [
+            (smtplib.SMTPAuthenticationError(535, b'sensitive response'), ('SMTP_AUTH_FAILED', 535)),
+            (TimeoutError('sensitive host'), ('SMTP_TIMEOUT', None)),
+            (ConnectionRefusedError('sensitive host'), ('SMTP_CONNECTION_FAILED', None)),
+            (ValueError('sensitive configuration'), ('SMTP_CONFIG_INVALID', None)),
+        ]
+        for error, expected in cases:
+            with self.subTest(category=expected[0]):
+                self.assertEqual(delivery_failure_reason(error), expected)
